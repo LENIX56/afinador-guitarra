@@ -1,0 +1,209 @@
+<!-- ✅ Afinador completo: micrófono + sonidos por cuerda -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Afinador de Guitarra</title>
+  <style>
+    body {
+      background: #111;
+      color: #eee;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      padding: 2em;
+    }
+    h1 {
+      margin-bottom: 0.5em;
+    }
+    #note {
+      font-size: 5em;
+      margin: 0.3em 0;
+    }
+    #detune {
+      font-size: 2em;
+      color: #ff5555;
+    }
+    select, button {
+      font-size: 1.2em;
+      margin: 0.5em;
+      padding: 0.4em 0.8em;
+      border-radius: 5px;
+      border: none;
+    }
+    button {
+      background: #222;
+      color: #eee;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #444;
+    }
+    .string-buttons {
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-top: 1em;
+      gap: 10px;
+    }
+    .string-buttons button {
+      background: #333;
+    }
+  </style>
+</head>
+<body>
+  <h1>Afinador de Guitarra</h1>
+
+  <label for="tuning">Elige afinación:</label>
+  <select id="tuning">
+    <option value="standard">Estándar (E A D G B e)</option>
+    <option value="dropd">Drop D (D A D G B e)</option>
+    <option value="dropc">Drop C (C G C F A D)</option>
+    <option value="openG">Open G (D G D G B D)</option>
+    <option value="openE">Open E (E B E G# B E)</option>
+  </select>
+
+  <div class="string-buttons" id="play-buttons"></div>
+
+  <div id="note">--</div>
+  <div id="detune">Presiona Iniciar Afinador para empezar</div>
+
+  <button id="startBtn">Iniciar Afinador 🎤</button>
+
+  <!-- Librería de pitch detection -->
+  <script src="https://cdn.jsdelivr.net/gh/lenin-openai/pitch-detect-host/PitchDetect.min.js"></script>
+
+  <script>
+    const tunings = {
+      standard: ['E2', 'A2', 'D3', 'G3', 'B3', 'E4'],
+      dropd: ['D2', 'A2', 'D3', 'G3', 'B3', 'E4'],
+      dropc: ['C2', 'G2', 'C3', 'F3', 'A3', 'D4'],
+      openG: ['D2', 'G2', 'D3', 'G3', 'B3', 'D4'],
+      openE: ['E2', 'B2', 'E3', 'G#3', 'B3', 'E4']
+    };
+
+    const noteStrings = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+    const noteDisplay = document.getElementById('note');
+    const detuneDisplay = document.getElementById('detune');
+    const tuningSelect = document.getElementById('tuning');
+    const startBtn = document.getElementById('startBtn');
+    const playButtons = document.getElementById('play-buttons');
+
+    let audioContext, analyzerNode, micStream, pitchDetector;
+    const bufferLength = 2048;
+    let float32Buffer;
+
+    function frequencyToNote(freq) {
+      const A4 = 440;
+      const semitonesFromA4 = 12 * (Math.log2(freq / A4));
+      const noteIndex = Math.round(semitonesFromA4) + 57;
+      const octave = Math.floor(noteIndex / 12);
+      const noteName = noteStrings[(noteIndex % 12 + 12) % 12];
+      return noteName + octave;
+    }
+
+    function getDetune(freq, noteFreq) {
+      return Math.floor(1200 * Math.log2(freq / noteFreq));
+    }
+
+    function noteToFrequency(note) {
+      const octave = parseInt(note.slice(-1));
+      const key = note.slice(0, -1);
+      const noteIndex = noteStrings.indexOf(key);
+      return 440 * Math.pow(2, (noteIndex + 12 * (octave - 4) - 9) / 12);
+    }
+
+    function createSoundButtons(tuning) {
+      playButtons.innerHTML = '';
+      tuning.forEach(note => {
+        const btn = document.createElement('button');
+        btn.textContent = note;
+        btn.onclick = () => playNote(note);
+        playButtons.appendChild(btn);
+      });
+    }
+
+    function playNote(note) {
+      if (!audioContext) audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const freq = noteToFrequency(note);
+      const osc = audioContext.createOscillator();
+      const gain = audioContext.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      osc.connect(gain);
+      gain.connect(audioContext.destination);
+      gain.gain.setValueAtTime(0.5, audioContext.currentTime);
+      osc.start();
+      osc.stop(audioContext.currentTime + 1.2);
+    }
+
+    tuningSelect.addEventListener('change', () => {
+      createSoundButtons(tunings[tuningSelect.value]);
+    });
+
+    async function startTuner() {
+      startBtn.disabled = true;
+      detuneDisplay.textContent = "Accediendo al micrófono...";
+      try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const source = audioContext.createMediaStreamSource(micStream);
+        analyzerNode = audioContext.createAnalyser();
+        analyzerNode.fftSize = bufferLength * 2;
+        source.connect(analyzerNode);
+
+        pitchDetector = await PitchDetector.forFloat32Array(bufferLength);
+        float32Buffer = new Float32Array(bufferLength);
+
+        detuneDisplay.textContent = "Escuchando...";
+        detectPitch();
+      } catch (e) {
+        detuneDisplay.textContent = "Error al acceder al micrófono";
+        alert('Error: ' + e.message);
+        startBtn.disabled = false;
+      }
+    }
+
+    function detectPitch() {
+      analyzerNode.getFloatTimeDomainData(float32Buffer);
+      const pitch = pitchDetector.findPitch(float32Buffer, audioContext.sampleRate);
+      if (pitch) {
+        const detectedNote = frequencyToNote(pitch);
+        noteDisplay.textContent = detectedNote;
+
+        const tuning = tunings[tuningSelect.value];
+        let closestFreq = 0, minDiff = Infinity;
+        for (let n of tuning) {
+          const f = noteToFrequency(n);
+          const diff = Math.abs(f - pitch);
+          if (diff < minDiff) {
+            minDiff = diff;
+            closestFreq = f;
+          }
+        }
+
+        const detune = getDetune(pitch, closestFreq);
+        if (Math.abs(detune) < 10) {
+          detuneDisplay.textContent = '¡Afinado!';
+          detuneDisplay.style.color = '#0f0';
+        } else if (detune > 0) {
+          detuneDisplay.textContent = `Sube ${detune} cent.`;
+          detuneDisplay.style.color = '#f55';
+        } else {
+          detuneDisplay.textContent = `Baja ${-detune} cent.`;
+          detuneDisplay.style.color = '#55f';
+        }
+      } else {
+        noteDisplay.textContent = '--';
+        detuneDisplay.textContent = 'Escuchando...';
+        detuneDisplay.style.color = '#aaa';
+      }
+      requestAnimationFrame(detectPitch);
+    }
+
+    startBtn.addEventListener('click', startTuner);
+    createSoundButtons(tunings[tuningSelect.value]);
+  </script>
+</body>
+</html>
